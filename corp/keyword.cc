@@ -40,14 +40,52 @@ Keyword::Keyword (Corpus *c1, Corpus *c2, WordList *wl1, WordList *wl2, float N,
              vector<string> pos_regex_filters, vector<string> neg_regex_filters, FILE* progress)
             : curr (0), totalcount(0), totalfreq1(0), totalfreq2(0)
 {
-    string str_params(frqtype), ftype, scoretype;
+    auto get_data_index = [](const string& scoretype, const int addfreqs_size) -> int {
+        if (scoretype == "logL")
+            return 2 * addfreqs_size + 5;
+        else if (scoretype == "chi2")
+            return 2 * addfreqs_size + 6;
+        else if (scoretype == "din")
+            return 2 * addfreqs_size + 7;
+        else
+            return 2 * addfreqs_size + 4;
+    };
+
+    string str_params(frqtype), ftype, sortby, filterby, substr_params;
+    double filter_min = std::nan(""), filter_max = std::nan("");
     int n = str_params.find(";");
     if (n == -1) {
         ftype = str_params;
     } else {
         ftype = str_params.substr(0, n);
-        scoretype = str_params.substr(n+1);
+        substr_params = str_params.substr(n+1);
+
+        int m = substr_params.find(";");
+        if (m == -1) {
+            sortby = substr_params;
+        } else {
+            sortby = substr_params.substr(0, m);
+            substr_params = substr_params.substr(m+1);
+            if (!substr_params.empty()) {
+                size_t slash1 = substr_params.find("/");
+                size_t slash2 = substr_params.rfind("/");
+                if (slash1 != string::npos && slash2 != string::npos && slash1 != slash2) {
+                    filterby = substr_params.substr(0, slash1);
+                    string substr_min = substr_params.substr(slash1 + 1, slash2 - slash1 - 1);
+                    if (!substr_min.empty())
+                        filter_min = stod(substr_min);
+                    string substr_max = substr_params.substr(slash2 + 1);
+                    if (!substr_max.empty())
+                        filter_max = stod(substr_max);
+                } else {
+                    throw new CorpInfoNotFound("Invalid filterby format for Keyword");
+                }
+            }
+        }
     }
+
+    const int sort_index = get_data_index(sortby, addfreqs.size());
+    const int filter_index = get_data_index(filterby, addfreqs.size());
 
     vector<regexp_pattern*> pos_regpats;
     for (auto it = pos_regex_filters.begin(); it != pos_regex_filters.end(); it++) {
@@ -125,20 +163,26 @@ Keyword::Keyword (Corpus *c1, Corpus *c2, WordList *wl1, WordList *wl2, float N,
         freqs[2*addfreqs.size() + 7] = 100 * ((fpm1 - fpm2) / (fpm1 + fpm2)); // DIN size effect
 
         float score;
-        if (scoretype == "logL") {
-            if (isnan(freqs[2*addfreqs.size() + 5])) {
-                score = 0;
-            } else {
-                score = freqs[2*addfreqs.size() + 5];
-            }
-        } else if (scoretype == "chi2") {
-            score = freqs[2*addfreqs.size() + 6];
-        } else if (scoretype == "din") {
-            score = freqs[2*addfreqs.size() + 7];
+        if (isnan(freqs[sort_index])) {
+            score = 0;
         } else {
-            score = freqs[2*addfreqs.size() + 4];
+            score = freqs[sort_index];
         }
 
+        if (!isnan(filter_min) && (isnan(freqs[filter_index]) || freqs[filter_index] < filter_min)) {
+            delete[] freqs;
+            totalcount--;
+            totalfreq1 -= f1;
+            totalfreq2 -= f2;
+            continue;
+        }
+        if (!isnan(filter_max) && (isnan(freqs[filter_index]) || freqs[filter_index] > filter_max)) {
+            delete[] freqs;
+            totalcount--;
+            totalfreq1 -= f1;
+            totalfreq2 -= f2;
+            continue;
+        }
 
         if (heap.size() < maxlen) {
             if (!check_string (str, pos_regpats, neg_regpats, blacklist, whitelist)) {
